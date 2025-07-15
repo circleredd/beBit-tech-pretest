@@ -3,9 +3,20 @@ from django.shortcuts import render
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
+from functools import wraps
 
 from .models import Order
 from .serializers import OrderSerializer
+
+def Auth(view_func):
+    @wraps(view_func)
+    def _wrapped_view(request, *args, **kwargs):
+        if request.data.get("token") != ACCEPTED_TOKEN:
+            return Response({"detail": "Unauthorized"}, status=status.HTTP_401_UNAUTHORIZED)
+        # 驗證通過就執行後續 view
+        return view_func(request, *args, **kwargs)
+    return _wrapped_view
+
 
 
 # Create your views here.
@@ -13,11 +24,8 @@ ACCEPTED_TOKEN = ('omni_pretest_token')
 
 
 @api_view(['POST'])
-def import_order(request):
-    # Add your code here
-    if request.data.get("token") != ACCEPTED_TOKEN:
-        return Response({"detail": "Unauthorized"}, status=status.HTTP_401_UNAUTHORIZED)
-    
+@Auth
+def import_order(request):    
     payload = request.data.get('data', {})
 
     # 用 Serializer 進行格式驗證
