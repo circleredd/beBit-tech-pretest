@@ -1,0 +1,20 @@
+{
+  "name": "MyProject Dev Container",
+  "dockerComposeFile": ["../docker-compose.yml"],
+  "service": "web",
+  "workspaceFolder": "/code",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "python.pythonPath": "/usr/local/bin/python",
+        "python.analysis.extraPaths": ["/code"],
+        "python.analysis.diagnosticSeverityOverrides": {
+          "reportMissingImports": "none"
+        }
+      },
+      "extensions": ["ms-python.python", "ms-azuretools.vscode-docker"]
+    }
+  },
+  "forwardPorts": [8008, 7432],
+  "postCreateCommand": "pip install -r requirements.txt"
+}
