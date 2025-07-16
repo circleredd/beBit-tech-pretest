@@ -40,8 +40,44 @@ class OrderTestCase(APITestCase):
         resp = self.client.post(self.url, payload, format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         # 驗證 serializer 回傳了欄位錯誤
-        self.assertIn('order_number', resp.data)
-        self.assertIn('total_price', resp.data)
+        error = resp.data[0]
+        self.assertIn('order_number', error)
+        self.assertIn('total_price', error)
+    
+    def test_bulk_one_invalid_bad_request(self):
+        """多筆匯入時，其中一筆格式錯誤，應回 400 且不會建立任何訂單"""
+        payload = {
+            'token': self.valid_token,
+            'data': [
+                {'order_number': 'OK001', 'total_price': 100},
+                {'order_number': '',      'total_price': 200},  # 錯誤：order_number 不能為空
+                {'order_number': 'OK003', 'total_price': 300},
+            ]
+        }
+        resp = self.client.post(self.url, payload, format='json')
+
+        # 1. HTTP 狀態碼應為 400
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # 2. Atomically rollback：DB 中不應該有任何資料
+        self.assertEqual(Order.objects.count(), 0)
+
+        # 3. resp.data 應該是一個 list，長度等於輸入筆數
+        self.assertIsInstance(resp.data, list)
+        self.assertEqual(len(resp.data), 3)
+
+        # 4. 第 1 筆與第 3 筆無錯誤（空 dict），第 2 筆要有 order_number 的錯誤
+        self.assertEqual(resp.data[0], {})
+        self.assertEqual(resp.data[2], {})
+
+        err_item = resp.data[1]
+        self.assertIn('order_number', err_item)
+        self.assertTrue(
+            any(
+                'may not be blank' in str(msg) or 'blank' in str(msg)
+                for msg in err_item['order_number']
+            )
+        )
 
     def test_success_creates_order(self):
         """正確 payload 應該建立一筆 Order 並回傳 201"""
@@ -54,10 +90,14 @@ class OrderTestCase(APITestCase):
         self.assertEqual(order.order_number, 'TEST123')
         self.assertEqual(order.total_price, 999)
 
-        # 回傳的 JSON 要帶回建立後的 order 資料
+        # 回傳的 JSON 要帶回建立後的 order 資料（list）
         self.assertIn('order', resp.data)
-        self.assertEqual(resp.data['order']['order_number'], 'TEST123')
-        self.assertEqual(resp.data['order']['total_price'], 999)
+        self.assertIsInstance(resp.data['order'], list)
+        self.assertEqual(len(resp.data['order']), 1)
+
+        returned = resp.data['order'][0]
+        self.assertEqual(returned['order_number'], 'TEST123')
+        self.assertEqual(returned['total_price'], 999)
 
 
     def test_wrong_token_unauthorized(self):
@@ -82,8 +122,8 @@ class OrderTestCase(APITestCase):
         resp = self.client.post(self.url, payload, format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         # 預期錯誤訊息會指出 order_number 與 total_price 必須提供
-        self.assertIn('order_number', resp.data)
-        self.assertIn('total_price', resp.data)
+        self.assertIn('data', resp.data)
+        self.assertEqual(resp.data['data'], "請至少提供一筆訂單資料。")
 
     def test_order_number_too_long(self):
         """order_number 超過 max_length=25，應回 400"""
@@ -97,10 +137,18 @@ class OrderTestCase(APITestCase):
         }
         resp = self.client.post(self.url, payload, format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn('order_number', resp.data)
+
+        # 取出第一筆錯誤 dict
+        first_error = resp.data[0]
+        self.assertIn('order_number', first_error)
+
         # 確認訊息含有 max_length 提示
+        errors = first_error['order_number']
         self.assertTrue(
-            any('Ensure this field has no more than' in msg for msg in resp.data['order_number'])
+            any(
+                'Ensure this field has no more than 25 characters.' in str(msg)
+                for msg in errors
+            )
         )
 
     def test_zero_total_price_creates_order(self):
@@ -129,14 +177,35 @@ class OrderTestCase(APITestCase):
         }
         resp = self.client.post(self.url, payload, format='json')
 
-        # 1. HTTP 400
+        #  HTTP 400
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
-        # 2. 錯誤欄位在 total_price
-        self.assertIn('total_price', resp.data)
+        # 取出第一筆錯誤 dict
+        first_error = resp.data[0]
 
-        # 3. 錯誤訊息符合我們在 Serializer 裡自訂的文字
-        self.assertEqual(
-            resp.data['total_price'][0],
-            "total_price 不能為負數"
+        # 取出錯誤 list，並檢查訊息內容
+        errors = first_error['total_price']
+        self.assertIsInstance(errors, list)
+        
+        # 至少有一條訊息包含 “greater than or equal to 0”
+        self.assertTrue(
+            any(
+                'greater than or equal to 0' in str(msg)
+                for msg in errors
+            )
         )
+
+    def test_bulk_create_orders(self):
+        """多筆匯入 -> 201, 建立多筆"""
+        payload = {
+            'token': self.valid_token,
+            'data': [
+                {'order_number': 'A1', 'total_price': 10},
+                {'order_number': 'B2', 'total_price': 20},
+            ]
+        }
+        resp = self.client.post(self.url, payload, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Order.objects.count(), 2)
+        numbers = [o['order_number'] for o in resp.data['order']]
+        self.assertListEqual(sorted(numbers), ['A1', 'B2'])
