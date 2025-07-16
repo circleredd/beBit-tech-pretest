@@ -30,6 +30,10 @@ def import_order(request):
     orders_data = request.data.get('data', [])
     if isinstance(orders_data, dict):
         orders_data = [orders_data]
+    
+    # 若資料為空
+    if not orders_data:
+        return Response({"data": "請至少提供一筆訂單資料。"}, status=status.HTTP_400_BAD_REQUEST)
 
     # 用 Serializer 進行格式驗證
     serializer = OrderSerializer(data=orders_data, many=True)
